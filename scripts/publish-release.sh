@@ -16,6 +16,10 @@ if test "$VERBOSE"; then
   set -x
 fi
 
+# Prevent AppleDouble (._) files and extended attributes in tar output.
+export COPYFILE_DISABLE=1
+export COPY_EXTENDED_ATTRIBUTES_DISABLE=1
+
 # ensure we have the latest version tags
 git fetch origin -pft
 
