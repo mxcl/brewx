@@ -71,7 +71,20 @@ fn main() {
         process::exit(1);
     };
 
-    if let Some(path) = find_in_path(&tool) {
+    if tool.contains('/') {
+        eprintln!("brewx: tool name must not contain path separators");
+        process::exit(64);
+    }
+
+    let prefix = match brew_prefix() {
+        Ok(prefix) => prefix,
+        Err(err) => {
+            eprintln!("brewx: {err}");
+            process::exit(1);
+        }
+    };
+
+    if let Some(path) = find_brew_executable(&prefix, formula, &tool) {
         exec_tool(&path, &tool_args);
     }
 
@@ -80,7 +93,15 @@ fn main() {
         process::exit(1);
     }
 
-    exec_tool(&tool, &tool_args);
+    if let Some(path) = find_brew_executable(&prefix, formula, &tool) {
+        exec_tool(&path, &tool_args);
+    }
+
+    eprintln!(
+        "brewx: '{tool}' not found under Homebrew prefix {}",
+        prefix.display()
+    );
+    process::exit(1);
 }
 
 fn load_db() -> Result<Db, String> {
@@ -106,20 +127,43 @@ fn print_usage(program: &OsString) {
     println!();
     println!("Runs a Homebrew executable, installing its formula if needed.");
     println!("Uses an embedded Homebrew executable map.");
+    println!("Only executes binaries under the Homebrew prefix.");
 }
 
-fn find_in_path(tool: &str) -> Option<PathBuf> {
-    if tool.contains('/') {
-        let path = PathBuf::from(tool);
-        if is_executable(&path) {
-            return Some(path);
+fn brew_prefix() -> Result<PathBuf, String> {
+    if let Some(prefix) = env::var_os("HOMEBREW_PREFIX") {
+        if !prefix.is_empty() {
+            return Ok(PathBuf::from(prefix));
         }
-        return None;
     }
 
-    let path_var = env::var_os("PATH")?;
-    for entry in env::split_paths(&path_var) {
-        let candidate = entry.join(tool);
+    let output = Command::new("brew")
+        .arg("--prefix")
+        .output()
+        .map_err(|err| format!("failed to run brew --prefix: {err}"))?;
+
+    if !output.status.success() {
+        return Err("brew --prefix failed".to_string());
+    }
+
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|err| format!("brew --prefix returned non-utf8: {err}"))?;
+    let prefix = stdout.trim();
+    if prefix.is_empty() {
+        return Err("brew --prefix returned an empty prefix".to_string());
+    }
+    Ok(PathBuf::from(prefix))
+}
+
+fn find_brew_executable(prefix: &Path, formula: &str, tool: &str) -> Option<PathBuf> {
+    let candidates = [
+        prefix.join("bin").join(tool),
+        prefix.join("sbin").join(tool),
+        prefix.join("opt").join(formula).join("bin").join(tool),
+        prefix.join("opt").join(formula).join("sbin").join(tool),
+    ];
+
+    for candidate in candidates {
         if is_executable(&candidate) {
             return Some(candidate);
         }
