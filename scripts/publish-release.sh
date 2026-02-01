@@ -20,14 +20,14 @@ fi
 export COPYFILE_DISABLE=1
 export COPY_EXTENDED_ATTRIBUTES_DISABLE=1
 
-config_toml="$PWD/config.toml"
-if [ ! -f "$config_toml" ]; then
-  echo "error: $config_toml not found" >&2
+cargo_toml="$PWD/Cargo.toml"
+if [ ! -f "$cargo_toml" ]; then
+  echo "error: $cargo_toml not found" >&2
   exit 1
 fi
 
 v_new="$(
-  python - "$config_toml" <<'PY'
+  python - "$cargo_toml" <<'PY'
 import sys
 import tomllib
 
@@ -35,14 +35,13 @@ path = sys.argv[1]
 with open(path, "rb") as f:
     data = tomllib.load(f)
 
-version = data.get("version")
-if not isinstance(version, str) or not version.strip():
-    package = data.get("package", {})
-    if isinstance(package, dict):
-        version = package.get("version")
+package = data.get("package", {})
+version = None
+if isinstance(package, dict):
+    version = package.get("version")
 
 if not isinstance(version, str) or not version.strip():
-    sys.stderr.write("error: version not found in config.toml\n")
+    sys.stderr.write("error: version not found in Cargo.toml\n")
     sys.exit(1)
 
 print(version.strip())
@@ -50,7 +49,7 @@ PY
 )"
 
 if [ "$(npx --yes -- semver "$v_new")" != "$v_new" ]; then
-  echo "error: config.toml version $v_new is not valid semver" >&2
+  echo "error: Cargo.toml version $v_new is not valid semver" >&2
   exit 1
 fi
 
@@ -80,7 +79,7 @@ fi
 if [ -n "$v_latest" ]; then
   v_max="$(npx --yes -- semver --include-prerelease "$v_new" "$v_latest" | tail -n1)"
   if [ "$v_max" != "$v_new" ]; then
-    echo "error: config.toml version $v_new is older than latest tag v$v_latest" >&2
+    echo "error: Cargo.toml version $v_new is older than latest tag v$v_latest" >&2
     exit 1
   fi
 fi
