@@ -1,4 +1,4 @@
-#!/usr/bin/env -S pkgx +gh +gum +npx +rustup bash -exo pipefail
+#!/usr/bin/env -S pkgx +gh +gum +npx +rustup +python@3.11 bash -exo pipefail
 
 cd "$(dirname "$0")"/..
 
@@ -20,6 +20,53 @@ fi
 export COPYFILE_DISABLE=1
 export COPY_EXTENDED_ATTRIBUTES_DISABLE=1
 
+config_toml="$PWD/config.toml"
+if [ ! -f "$config_toml" ]; then
+  echo "error: $config_toml not found" >&2
+  exit 1
+fi
+
+v_new="$(
+  python - "$config_toml" <<'PY'
+import sys
+import tomllib
+
+path = sys.argv[1]
+with open(path, "rb") as f:
+    data = tomllib.load(f)
+
+version = data.get("version")
+if not isinstance(version, str) or not version.strip():
+    package = data.get("package", {})
+    if isinstance(package, dict):
+        version = package.get("version")
+
+if not isinstance(version, str) or not version.strip():
+    sys.stderr.write("error: version not found in config.toml\n")
+    sys.exit(1)
+
+print(version.strip())
+PY
+)"
+
+if [ "$(npx --yes -- semver "$v_new")" != "$v_new" ]; then
+  echo "error: config.toml version $v_new is not valid semver" >&2
+  exit 1
+fi
+
+case $1 in
+"")
+  clobber=false
+  ;;
+clobber)
+  clobber=true
+  ;;
+*)
+  echo "usage $0 [clobber]" >&2
+  exit 1
+  ;;
+esac
+
 # ensure we have the latest version tags
 git fetch origin -pft
 
@@ -30,31 +77,22 @@ if versions="$(git tag | grep '^v[0-9]\+\.[0-9]\+\.[0-9]\+')"; then
   v_latest="$(npx --yes -- semver --include-prerelease $versions | tail -n1)"
 fi
 
-case $1 in
-clobber)
-  v_new=$v_latest
-  ;;
-major|minor|patch|prerelease)
-  v_new=$(npx --yes -- semver bump $v_latest --increment $1)
-  ;;
-"")
-  echo "usage $0 <major|minor|patch|prerelease|VERSION>" >&2
-  exit 1;;
-*)
-  if test "$(npx --yes -- semver "$1")" != "$1"; then
-    echo "$1 doesn't look like valid semver."
+if [ -n "$v_latest" ]; then
+  v_max="$(npx --yes -- semver --include-prerelease "$v_new" "$v_latest" | tail -n1)"
+  if [ "$v_max" != "$v_new" ]; then
+    echo "error: config.toml version $v_new is older than latest tag v$v_latest" >&2
     exit 1
   fi
-  v_new=$1
-  ;;
-esac
-
-if [ $v_new = $v_latest ] && [ "$1" != clobber ]; then
-  echo "$v_new already exists!" >&2
-  exit 1
 fi
 
-if [ "$1" == clobber ]; then
+if git tag -l "v$v_new" | grep -q .; then
+  if [ "$clobber" = false ]; then
+    echo "error: v$v_new already exists (use clobber to reupload)" >&2
+    exit 1
+  fi
+fi
+
+if [ "$clobber" = true ]; then
   true
 elif ! gh release view v$v_new >/dev/null 2>&1; then
   gum confirm "prepare draft release for $v_new?" || exit 1
@@ -63,7 +101,7 @@ elif ! gh release view v$v_new >/dev/null 2>&1; then
     v$v_new \
     --draft=true \
     --generate-notes \
-    $([ -n "$v_latest" ] && echo "--notes-start-tag=v$v_latest") \
+    $([ -n "$v_latest" ] && [ "$v_latest" != "$v_new" ] && echo "--notes-start-tag=v$v_latest") \
     --title=v$v_new
 else
   gum format "> existing $v_new release found, using that"
@@ -84,7 +122,7 @@ gh release upload --clobber v$v_new "$artifact"
 
 gh release view v$v_new
 
-if [ "$1" != clobber ]; then
+if [ "$clobber" = false ]; then
   gum confirm "draft prepared, release $v_new?" || exit 1
 
   gh release edit \
