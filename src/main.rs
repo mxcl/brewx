@@ -211,6 +211,25 @@ fn is_root() -> bool {
     unsafe { libc::geteuid() == 0 }
 }
 
+fn homebrew_bin_path_env() -> Option<OsString> {
+    let homebrew_bin = PathBuf::from("/opt/homebrew/bin");
+    let path_os = env::var_os("PATH");
+    if let Some(ref current) = path_os {
+        for entry in env::split_paths(current) {
+            if entry == homebrew_bin {
+                return None;
+            }
+        }
+    }
+
+    let mut paths = Vec::new();
+    paths.push(homebrew_bin);
+    if let Some(current) = path_os {
+        paths.extend(env::split_paths(&current));
+    }
+    env::join_paths(paths).ok()
+}
+
 fn run_brew_install(formula: &str) -> Result<(), String> {
     eprintln!("brewx: installing {formula} via brew");
     let status = Command::new("brew")
@@ -230,7 +249,12 @@ fn run_brew_install(formula: &str) -> Result<(), String> {
 }
 
 fn exec_tool<T: AsRef<OsStr>>(tool: T, args: &[OsString]) -> ! {
-    let err = Command::new(tool).args(args).exec();
+    let mut cmd = Command::new(tool);
+    cmd.args(args);
+    if let Some(path) = homebrew_bin_path_env() {
+        cmd.env("PATH", path);
+    }
+    let err = cmd.exec();
     eprintln!("brewx: failed to exec: {err}");
     process::exit(1);
 }
