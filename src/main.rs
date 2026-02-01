@@ -49,7 +49,7 @@ fn main() {
     }
 
     if is_version_flag(&tool_os) {
-        println!("brewx 0.1.0");
+        println!("brewx {}", env!("CARGO_PKG_VERSION"));
         return;
     }
 
