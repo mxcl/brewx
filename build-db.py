@@ -17,7 +17,7 @@ ANALYTICS_URL = "https://formulae.brew.sh/api/analytics/install/30d.json"
 CACHE_DIR = "cache"
 ECOSYSTEM = "brew.sh"
 DB_PATH = "db.json"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 META_KEY = "__pkgdb_meta__"
 PAYLOAD_KEY = "__pkgdb_payload__"
 USER_AGENT = "brewx/0.1"
@@ -355,7 +355,9 @@ def _sorted_entries(entries):
                 item.get("formula", ""),
             )
         )
-        ordered[executable] = items
+        top = items[0]["formula"] if items else None
+        if top:
+            ordered[executable] = top
     return ordered
 
 

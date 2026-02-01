@@ -1,8 +1,9 @@
 # brewx
 
 brewx is a single Rust binary that runs Homebrew executables on demand.
-It resolves the executable to a Homebrew formula using a local `db.json`
-file, installs the formula if needed, and then execs the requested tool.
+It resolves the executable to a Homebrew formula using an embedded
+`db.json`, installs the formula if needed, and then execs the requested
+tool.
 
 Example:
 
@@ -12,7 +13,7 @@ Example:
 
 ## Quick start
 
-1. Build the database from the existing cached Homebrew data:
+1. Build the database from cached Homebrew data:
 
 ```
 ./build-db.py
@@ -32,17 +33,16 @@ cargo build --release
 
 ## Database
 
-`build-db.py` reads cached Homebrew API responses from `cache/brew.sh` and
-writes `db.json` in the repository root. It never performs network
-requests, so the cache must already exist.
+`build-db.py` fetches Homebrew API responses (cached in `cache/brew.sh`)
+and writes `db.json` in the repository root. The Rust build embeds this
+file in the binary, so rebuild after regenerating the DB.
 
 `db.json` contains a schema version, a generation timestamp, and a map of
-executable names to ordered formula candidates. brewx picks the first
-formula for each executable, so entries are sorted by popularity and then
-name.
+executable names to their selected Homebrew formula. The builder uses
+install analytics to pick the most popular formula when there is more
+than one candidate.
 
 ## Constraints
 
-- brewx expects `db.json` in the current working directory.
-- The database is derived from Homebrew manifests and analytics data that
-  are already cached in this repository.
+- brewx embeds `db.json` at build time; rebuild after regenerating it.
+- The database is derived from Homebrew manifests and analytics data.

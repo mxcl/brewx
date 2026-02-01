@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::env;
 use std::ffi::{OsStr, OsString};
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 
@@ -9,22 +8,15 @@ use serde::Deserialize;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 
-const DB_PATH: &str = "db.json";
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
+const EMBEDDED_DB: &[u8] = include_bytes!("../db.json");
 
 #[derive(Debug, Deserialize)]
 struct Db {
     schema: u32,
     #[allow(dead_code)]
     generated_at: String,
-    entries: HashMap<String, Vec<DbEntry>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct DbEntry {
-    formula: String,
-    #[allow(dead_code)]
-    popularity: Option<u64>,
+    entries: HashMap<String, String>,
 }
 
 fn main() {
@@ -57,17 +49,7 @@ fn main() {
     };
 
     let tool_args: Vec<OsString> = args.collect();
-    let db_path = Path::new(DB_PATH);
-
-    if !db_path.exists() {
-        eprintln!(
-            "brewx: expected {} in the current directory. Run ./build-db.py first.",
-            DB_PATH
-        );
-        process::exit(2);
-    }
-
-    let db = match load_db(db_path) {
+    let db = match load_db() {
         Ok(db) => db,
         Err(err) => {
             eprintln!("brewx: {err}");
@@ -83,7 +65,7 @@ fn main() {
         process::exit(1);
     }
 
-    let Some(entry) = select_entry(&db, &tool) else {
+    let Some(formula) = select_entry(&db, &tool) else {
         eprintln!("brewx: no Homebrew formula found for '{tool}'");
         process::exit(1);
     };
@@ -92,7 +74,7 @@ fn main() {
         exec_tool(&path, &tool_args);
     }
 
-    if let Err(err) = run_brew_install(&entry.formula) {
+    if let Err(err) = run_brew_install(formula) {
         eprintln!("brewx: {err}");
         process::exit(1);
     }
@@ -100,14 +82,13 @@ fn main() {
     exec_tool(&tool, &tool_args);
 }
 
-fn load_db(path: &Path) -> Result<Db, String> {
-    let data = fs::read(path).map_err(|err| format!("failed to read {}: {err}", path.display()))?;
-    serde_json::from_slice(&data)
-        .map_err(|err| format!("failed to parse {}: {err}", path.display()))
+fn load_db() -> Result<Db, String> {
+    serde_json::from_slice(EMBEDDED_DB)
+        .map_err(|err| format!("failed to parse embedded db: {err}"))
 }
 
-fn select_entry<'a>(db: &'a Db, tool: &str) -> Option<&'a DbEntry> {
-    db.entries.get(tool).and_then(|entries| entries.first())
+fn select_entry<'a>(db: &'a Db, tool: &str) -> Option<&'a str> {
+    db.entries.get(tool).map(|value| value.as_str())
 }
 
 fn is_help_flag(value: &OsString) -> bool {
@@ -123,7 +104,7 @@ fn print_usage(program: &OsString) {
     println!("Usage: {program} <executable> [args...]");
     println!();
     println!("Runs a Homebrew executable, installing its formula if needed.");
-    println!("Requires a db.json file in the current directory.");
+    println!("Uses an embedded Homebrew executable map.");
 }
 
 fn find_in_path(tool: &str) -> Option<PathBuf> {
