@@ -103,6 +103,11 @@ fn main() {
         exec_tool(&path, &tool_args);
     }
 
+    if is_root() {
+        eprintln!("brewx: refusing to run brew install as root");
+        process::exit(1);
+    }
+
     if let Err(err) = run_brew_install(formula) {
         eprintln!("brewx: {err}");
         process::exit(1);
@@ -200,6 +205,10 @@ fn is_executable(path: &Path) -> bool {
         return false;
     }
     metadata.permissions().mode() & 0o111 != 0
+}
+
+fn is_root() -> bool {
+    unsafe { libc::geteuid() == 0 }
 }
 
 fn run_brew_install(formula: &str) -> Result<(), String> {
