@@ -26,10 +26,22 @@ fn main() {
         .next()
         .unwrap_or_else(|| OsString::from("brewx"));
 
-    let Some(tool_os) = args.next() else {
+    let Some(mut tool_os) = args.next() else {
         print_usage(&program);
         process::exit(64);
     };
+
+    let mut shebang_mode = false;
+    if is_shebang_flag(&tool_os) {
+        shebang_mode = true;
+        tool_os = match args.next() {
+            Some(value) => value,
+            None => {
+                print_usage(&program);
+                process::exit(64);
+            }
+        };
+    }
 
     if is_help_flag(&tool_os) {
         print_usage(&program);
@@ -49,6 +61,9 @@ fn main() {
         }
     };
 
+    if shebang_mode {
+        let _ = args.next();
+    }
     let tool_args: Vec<OsString> = args.collect();
     let db = match load_db() {
         Ok(db) => db,
@@ -121,11 +136,16 @@ fn is_version_flag(value: &OsString) -> bool {
     matches!(value.to_str(), Some("-V" | "--version"))
 }
 
+fn is_shebang_flag(value: &OsString) -> bool {
+    matches!(value.to_str(), Some("-!" | "--shebang"))
+}
+
 fn print_usage(program: &OsString) {
     let program = program.to_string_lossy();
-    println!("Usage: {program} <executable> [args...]");
+    println!("Usage: {program} [-! | --shebang] <executable> [args...]");
     println!();
     println!("Runs a Homebrew executable, installing its formula if needed.");
+    println!("Use -! or --shebang to drop the first argument (script path).");
     println!("Uses an embedded Homebrew executable map.");
     println!("Only executes binaries under the Homebrew prefix.");
 }
