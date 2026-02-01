@@ -240,8 +240,9 @@ def _manifest_url(formula):
     stable_revision = None
     if isinstance(stable, dict):
         stable_revision = stable.get("revision")
-    if revision is not None or stable_revision is not None:
-        url = f"{url}_{revision if revision is not None else stable_revision}"
+    revision_value = revision if revision is not None else stable_revision
+    if revision_value not in (None, 0):
+        url = f"{url}_{revision_value}"
 
     rebuild = (
         formula.get("bottle", {})
