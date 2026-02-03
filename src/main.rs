@@ -226,20 +226,23 @@ fn add_opt_paths(paths: &mut Vec<PathBuf>, prefix: &Path, formula: &str) {
 fn brew_dependencies(formula: &str) -> Result<Vec<String>, String> {
     let output = Command::new("brew")
         .arg("deps")
+        .arg("--topological")
         .arg("--formula")
         .arg(formula)
         .output()
-        .map_err(|err| format!("failed to run brew deps {formula}: {err}"))?;
+        .map_err(|err| format!("failed to run brew deps --topological {formula}: {err}"))?;
 
     if !output.status.success() {
         return Err(match output.status.code() {
-            Some(code) => format!("brew deps {formula} failed with exit code {code}"),
-            None => format!("brew deps {formula} terminated by signal"),
+            Some(code) => {
+                format!("brew deps --topological {formula} failed with exit code {code}")
+            }
+            None => format!("brew deps --topological {formula} terminated by signal"),
         });
     }
 
     let stdout = String::from_utf8(output.stdout)
-        .map_err(|err| format!("brew deps {formula} returned non-utf8: {err}"))?;
+        .map_err(|err| format!("brew deps --topological {formula} returned non-utf8: {err}"))?;
     let deps = stdout
         .lines()
         .map(str::trim)
@@ -276,9 +279,21 @@ fn build_exec_path(prefix: &Path, formula: &str) -> OsString {
 
 fn run_brew_install(formula: &str) -> Result<(), String> {
     eprintln!("brewx: installing {formula} via brew");
+    let deps = brew_dependencies(formula)?;
+    if !deps.is_empty() {
+        eprintln!(
+            "brewx: installing {} dependencies via brew --skip-link",
+            deps.len()
+        );
+        for dep in deps {
+            run_brew_install_skip_link(&dep, true)?;
+        }
+    }
+
     let status = Command::new("brew")
         .arg("install")
         .arg("--skip-link")
+        .arg("--ignore-dependencies")
         .arg(formula)
         .status()
         .map_err(|err| format!("failed to run brew: {err}"))?;
@@ -288,8 +303,43 @@ fn run_brew_install(formula: &str) -> Result<(), String> {
     }
 
     Err(match status.code() {
-        Some(code) => format!("brew install --skip-link {formula} failed with exit code {code}"),
-        None => format!("brew install --skip-link {formula} terminated by signal"),
+        Some(code) => {
+            format!("brew install --skip-link --ignore-dependencies {formula} failed with exit code {code}")
+        }
+        None => {
+            format!(
+                "brew install --skip-link --ignore-dependencies {formula} terminated by signal"
+            )
+        }
+    })
+}
+
+fn run_brew_install_skip_link(formula: &str, ignore_deps: bool) -> Result<(), String> {
+    let mut cmd = Command::new("brew");
+    cmd.arg("install").arg("--skip-link");
+    if ignore_deps {
+        cmd.arg("--ignore-dependencies");
+    }
+    cmd.arg(formula);
+
+    let status = cmd
+        .status()
+        .map_err(|err| format!("failed to run brew: {err}"))?;
+
+    if status.success() {
+        return Ok(());
+    }
+
+    let mut description = String::from("brew install --skip-link");
+    if ignore_deps {
+        description.push_str(" --ignore-dependencies");
+    }
+    description.push(' ');
+    description.push_str(formula);
+
+    Err(match status.code() {
+        Some(code) => format!("{description} failed with exit code {code}"),
+        None => format!("{description} terminated by signal"),
     })
 }
 
