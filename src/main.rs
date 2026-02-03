@@ -322,26 +322,30 @@ fn run_brew_install(prefix: &Path, formula: &str) -> Result<(), String> {
     let deps = brew_dependencies(formula)?;
     if !deps.is_empty() {
         eprintln!(
-            "brewx: installing {} dependencies via brew --skip-link",
+            "brewx: installing {} dependencies via brew --skip-link --as-dependency",
             deps.len()
         );
         for dep in deps {
-            run_brew_install_skip_link(prefix, &dep, true)?;
+            run_brew_install_skip_link(prefix, &dep, true, true)?;
         }
     }
 
-    run_brew_install_skip_link(prefix, formula, true)
+    run_brew_install_skip_link(prefix, formula, true, false)
 }
 
 fn run_brew_install_skip_link(
     prefix: &Path,
     formula: &str,
     ignore_deps: bool,
+    as_dependency: bool,
 ) -> Result<(), String> {
     let mut cmd = brew_command();
     cmd.arg("install").arg("--skip-link");
     if ignore_deps {
         cmd.arg("--ignore-dependencies");
+    }
+    if as_dependency {
+        cmd.arg("--as-dependency");
     }
     cmd.arg(formula);
 
@@ -357,6 +361,9 @@ fn run_brew_install_skip_link(
     let mut description = String::from("brew install --skip-link");
     if ignore_deps {
         description.push_str(" --ignore-dependencies");
+    }
+    if as_dependency {
+        description.push_str(" --as-dependency");
     }
     description.push(' ');
     description.push_str(formula);
