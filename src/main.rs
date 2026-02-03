@@ -325,12 +325,36 @@ fn run_brew_install(prefix: &Path, formula: &str) -> Result<(), String> {
             "brewx: installing {} dependencies via brew --skip-link --as-dependency",
             deps.len()
         );
-        for dep in deps {
-            run_brew_install_skip_link(prefix, &dep, true, true)?;
-        }
+        run_brew_install_deps(prefix, &deps)?;
     }
 
-    run_brew_install_skip_link(prefix, formula, true, false)
+    run_brew_install_skip_link(prefix, formula, false, false)
+}
+
+fn run_brew_install_deps(prefix: &Path, deps: &[String]) -> Result<(), String> {
+    let mut cmd = brew_command();
+    cmd.arg("install").arg("--skip-link").arg("--as-dependency");
+    for dep in deps {
+        cmd.arg(dep);
+    }
+
+    let status = cmd
+        .status()
+        .map_err(|err| format!("failed to run brew: {err}"))?;
+
+    if !status.success() {
+        return Err(match status.code() {
+            Some(code) => {
+                format!("brew install --skip-link --as-dependency failed with exit code {code}")
+            }
+            None => "brew install --skip-link --as-dependency terminated by signal".to_string(),
+        });
+    }
+
+    for dep in deps {
+        ensure_opt_link(prefix, dep)?;
+    }
+    Ok(())
 }
 
 fn run_brew_install_skip_link(
