@@ -162,7 +162,7 @@ fn brew_prefix() -> Result<PathBuf, String> {
         }
     }
 
-    let output = Command::new("brew")
+    let output = brew_command()
         .arg("--prefix")
         .output()
         .map_err(|err| format!("failed to run brew --prefix: {err}"))?;
@@ -224,7 +224,7 @@ fn add_opt_paths(paths: &mut Vec<PathBuf>, prefix: &Path, formula: &str) {
 }
 
 fn brew_dependencies(formula: &str) -> Result<Vec<String>, String> {
-    let output = Command::new("brew")
+    let output = brew_command()
         .arg("deps")
         .arg("--topological")
         .arg("--formula")
@@ -290,7 +290,7 @@ fn run_brew_install(formula: &str) -> Result<(), String> {
         }
     }
 
-    let status = Command::new("brew")
+    let status = brew_command()
         .arg("install")
         .arg("--skip-link")
         .arg("--ignore-dependencies")
@@ -315,7 +315,7 @@ fn run_brew_install(formula: &str) -> Result<(), String> {
 }
 
 fn run_brew_install_skip_link(formula: &str, ignore_deps: bool) -> Result<(), String> {
-    let mut cmd = Command::new("brew");
+    let mut cmd = brew_command();
     cmd.arg("install").arg("--skip-link");
     if ignore_deps {
         cmd.arg("--ignore-dependencies");
@@ -341,6 +341,13 @@ fn run_brew_install_skip_link(formula: &str, ignore_deps: bool) -> Result<(), St
         Some(code) => format!("{description} failed with exit code {code}"),
         None => format!("{description} terminated by signal"),
     })
+}
+
+fn brew_command() -> Command {
+    let mut cmd = Command::new("brew");
+    cmd.env("HOMEBREW_NO_INSTALL_CLEANUP", "1")
+        .env("HOMEBREW_NO_ENV_HINTS", "1");
+    cmd
 }
 
 fn exec_tool<T: AsRef<OsStr>>(tool: T, args: &[OsString], prefix: &Path, formula: &str) -> ! {
