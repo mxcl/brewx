@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 
 use serde::Deserialize;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{symlink, PermissionsExt};
 use std::os::unix::process::CommandExt;
 
 const SCHEMA_VERSION: u32 = 2;
@@ -108,7 +108,7 @@ fn main() {
         process::exit(1);
     }
 
-    if let Err(err) = run_brew_install(formula) {
+    if let Err(err) = run_brew_install(&prefix, formula) {
         eprintln!("brewx: {err}");
         process::exit(1);
     }
@@ -317,7 +317,7 @@ fn build_exec_path(prefix: &Path, formula: &str) -> OsString {
     })
 }
 
-fn run_brew_install(formula: &str) -> Result<(), String> {
+fn run_brew_install(prefix: &Path, formula: &str) -> Result<(), String> {
     eprintln!("brewx: installing {formula} via brew");
     let deps = brew_dependencies(formula)?;
     if !deps.is_empty() {
@@ -326,35 +326,18 @@ fn run_brew_install(formula: &str) -> Result<(), String> {
             deps.len()
         );
         for dep in deps {
-            run_brew_install_skip_link(&dep, true)?;
+            run_brew_install_skip_link(prefix, &dep, true)?;
         }
     }
 
-    let status = brew_command()
-        .arg("install")
-        .arg("--skip-link")
-        .arg("--ignore-dependencies")
-        .arg(formula)
-        .status()
-        .map_err(|err| format!("failed to run brew: {err}"))?;
-
-    if status.success() {
-        return Ok(());
-    }
-
-    Err(match status.code() {
-        Some(code) => {
-            format!("brew install --skip-link --ignore-dependencies {formula} failed with exit code {code}")
-        }
-        None => {
-            format!(
-                "brew install --skip-link --ignore-dependencies {formula} terminated by signal"
-            )
-        }
-    })
+    run_brew_install_skip_link(prefix, formula, true)
 }
 
-fn run_brew_install_skip_link(formula: &str, ignore_deps: bool) -> Result<(), String> {
+fn run_brew_install_skip_link(
+    prefix: &Path,
+    formula: &str,
+    ignore_deps: bool,
+) -> Result<(), String> {
     let mut cmd = brew_command();
     cmd.arg("install").arg("--skip-link");
     if ignore_deps {
@@ -367,6 +350,7 @@ fn run_brew_install_skip_link(formula: &str, ignore_deps: bool) -> Result<(), St
         .map_err(|err| format!("failed to run brew: {err}"))?;
 
     if status.success() {
+        ensure_opt_link(prefix, formula)?;
         return Ok(());
     }
 
@@ -381,6 +365,37 @@ fn run_brew_install_skip_link(formula: &str, ignore_deps: bool) -> Result<(), St
         Some(code) => format!("{description} failed with exit code {code}"),
         None => format!("{description} terminated by signal"),
     })
+}
+
+fn ensure_opt_link(prefix: &Path, formula: &str) -> Result<(), String> {
+    let keg = latest_cellar_keg(prefix, formula)
+        .ok_or_else(|| format!("no Cellar keg found for {formula}"))?;
+    let opt_dir = prefix.join("opt");
+    let link = opt_dir.join(formula);
+
+    if link.exists() {
+        let metadata = fs::symlink_metadata(&link)
+            .map_err(|err| format!("failed to stat {}: {err}", link.display()))?;
+        if metadata.file_type().is_symlink() {
+            let current = fs::read_link(&link)
+                .map_err(|err| format!("failed to read link {}: {err}", link.display()))?;
+            if current == keg {
+                return Ok(());
+            }
+            fs::remove_file(&link)
+                .map_err(|err| format!("failed to remove {}: {err}", link.display()))?;
+        } else {
+            return Err(format!(
+                "refusing to replace non-symlink opt path {}",
+                link.display()
+            ));
+        }
+    }
+
+    fs::create_dir_all(&opt_dir)
+        .map_err(|err| format!("failed to create {}: {err}", opt_dir.display()))?;
+    symlink(&keg, &link)
+        .map_err(|err| format!("failed to link {} -> {}: {err}", link.display(), keg.display()))
 }
 
 fn brew_command() -> Command {
