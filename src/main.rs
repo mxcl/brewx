@@ -193,7 +193,7 @@ fn find_brew_executable(prefix: &Path, formula: &str, tool: &str) -> Option<Path
             return Some(candidate);
         }
     }
-    None
+    find_cellar_executable(prefix, formula, tool)
 }
 
 fn is_executable(path: &Path) -> bool {
@@ -221,6 +221,44 @@ fn add_opt_paths(paths: &mut Vec<PathBuf>, prefix: &Path, formula: &str) {
     let opt = prefix.join("opt").join(formula);
     add_unique_path(paths, opt.join("bin"));
     add_unique_path(paths, opt.join("sbin"));
+}
+
+fn latest_cellar_keg(prefix: &Path, formula: &str) -> Option<PathBuf> {
+    let cellar = prefix.join("Cellar").join(formula);
+    let entries = fs::read_dir(&cellar).ok()?;
+    let mut versions = Vec::new();
+    for entry in entries {
+        let entry = entry.ok()?;
+        if entry.file_type().ok()?.is_dir() {
+            versions.push(entry.path());
+        }
+    }
+    if versions.is_empty() {
+        return None;
+    }
+    versions.sort_by_key(|path| {
+        path.file_name()
+            .map(|name| name.to_string_lossy().to_string())
+    });
+    versions.pop()
+}
+
+fn add_cellar_paths(paths: &mut Vec<PathBuf>, prefix: &Path, formula: &str) {
+    if let Some(keg) = latest_cellar_keg(prefix, formula) {
+        add_unique_path(paths, keg.join("bin"));
+        add_unique_path(paths, keg.join("sbin"));
+    }
+}
+
+fn find_cellar_executable(prefix: &Path, formula: &str, tool: &str) -> Option<PathBuf> {
+    let keg = latest_cellar_keg(prefix, formula)?;
+    let candidates = [keg.join("bin").join(tool), keg.join("sbin").join(tool)];
+    for candidate in candidates {
+        if is_executable(&candidate) {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 fn brew_dependencies(formula: &str) -> Result<Vec<String>, String> {
@@ -256,11 +294,13 @@ fn build_exec_path(prefix: &Path, formula: &str) -> OsString {
     let mut paths = Vec::new();
     add_unique_path(&mut paths, PathBuf::from("/opt/homebrew/bin"));
     add_opt_paths(&mut paths, prefix, formula);
+    add_cellar_paths(&mut paths, prefix, formula);
 
     match brew_dependencies(formula) {
         Ok(deps) => {
             for dep in deps {
                 add_opt_paths(&mut paths, prefix, &dep);
+                add_cellar_paths(&mut paths, prefix, &dep);
             }
         }
         Err(err) => eprintln!("brewx: {err}"),
