@@ -5,44 +5,31 @@ It resolves the executable to a Homebrew formula using an embedded
 `db.json`, installs the formula if needed, and then execs the requested
 tool.
 
-Example:
+## Usage
 
-```
-./target/release/brewx deno --help
-```
-
-## Quick start
-
-1. Build the database from cached Homebrew data:
-
-```
-./build-db.py
+```sh
+brewx deno --help
 ```
 
-2. Build the binary:
+## Installation
 
+We’re a single rust binary published to GitHub releases so use [yoink]:
+
+```sh
+$ sh <(https://yoink.sh) mxcl/brewx
+installed: ~/.local/bin/brewx
+
+# the yoink one-liner installs the latest brewx and that's it
 ```
-cargo build --release
-```
 
-3. Run a Homebrew tool:
+Alternatively download from the releases page.
 
-```
-./target/release/brewx deno --help
-```
 
-## Database
+## Caveats
 
-`build-db.py` fetches Homebrew API responses (cached in `cache/brew.sh`)
-and writes `db.json` in the repository root. The Rust build embeds this
-file in the binary, so rebuild after regenerating the DB.
+We install everything including deps without symlinks (brew supports this),
+thus your `/opt/homebrew/bin` remains what it was before.
 
-`db.json` contains a schema version, a generation timestamp, and a map of
-executable names to their selected Homebrew formula. The builder uses
-install analytics to pick the most popular formula when there is more
-than one candidate.
+Upgrades will still work etc.
 
-## Constraints
-
-- brewx embeds `db.json` at build time; rebuild after regenerating it.
-- The database is derived from Homebrew manifests and analytics data.
+[yoink]: https://github.com/mxcl/yoink
