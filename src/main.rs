@@ -100,7 +100,7 @@ fn main() {
     };
 
     if let Some(path) = find_brew_executable(&prefix, formula, &tool) {
-        exec_tool(&path, &tool_args);
+        exec_tool(&path, &tool_args, &prefix, formula);
     }
 
     if is_root() {
@@ -114,7 +114,7 @@ fn main() {
     }
 
     if let Some(path) = find_brew_executable(&prefix, formula, &tool) {
-        exec_tool(&path, &tool_args);
+        exec_tool(&path, &tool_args, &prefix, formula);
     }
 
     eprintln!(
@@ -211,29 +211,74 @@ fn is_root() -> bool {
     unsafe { libc::geteuid() == 0 }
 }
 
-fn homebrew_bin_path_env() -> Option<OsString> {
-    let homebrew_bin = PathBuf::from("/opt/homebrew/bin");
-    let path_os = env::var_os("PATH");
-    if let Some(ref current) = path_os {
-        for entry in env::split_paths(current) {
-            if entry == homebrew_bin {
-                return None;
+fn add_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.iter().any(|entry| entry == &path) {
+        paths.push(path);
+    }
+}
+
+fn add_opt_paths(paths: &mut Vec<PathBuf>, prefix: &Path, formula: &str) {
+    let opt = prefix.join("opt").join(formula);
+    add_unique_path(paths, opt.join("bin"));
+    add_unique_path(paths, opt.join("sbin"));
+}
+
+fn brew_dependencies(formula: &str) -> Result<Vec<String>, String> {
+    let output = Command::new("brew")
+        .arg("deps")
+        .arg("--formula")
+        .arg(formula)
+        .output()
+        .map_err(|err| format!("failed to run brew deps {formula}: {err}"))?;
+
+    if !output.status.success() {
+        return Err(match output.status.code() {
+            Some(code) => format!("brew deps {formula} failed with exit code {code}"),
+            None => format!("brew deps {formula} terminated by signal"),
+        });
+    }
+
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|err| format!("brew deps {formula} returned non-utf8: {err}"))?;
+    let deps = stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| line.to_string())
+        .collect();
+    Ok(deps)
+}
+
+fn build_exec_path(prefix: &Path, formula: &str) -> OsString {
+    let mut paths = Vec::new();
+    add_unique_path(&mut paths, PathBuf::from("/opt/homebrew/bin"));
+    add_opt_paths(&mut paths, prefix, formula);
+
+    match brew_dependencies(formula) {
+        Ok(deps) => {
+            for dep in deps {
+                add_opt_paths(&mut paths, prefix, &dep);
             }
+        }
+        Err(err) => eprintln!("brewx: {err}"),
+    }
+
+    if let Some(current) = env::var_os("PATH") {
+        for entry in env::split_paths(&current) {
+            add_unique_path(&mut paths, entry);
         }
     }
 
-    let mut paths = Vec::new();
-    paths.push(homebrew_bin);
-    if let Some(current) = path_os {
-        paths.extend(env::split_paths(&current));
-    }
-    env::join_paths(paths).ok()
+    env::join_paths(paths).unwrap_or_else(|_| {
+        env::var_os("PATH").unwrap_or_else(OsString::new)
+    })
 }
 
 fn run_brew_install(formula: &str) -> Result<(), String> {
     eprintln!("brewx: installing {formula} via brew");
     let status = Command::new("brew")
         .arg("install")
+        .arg("--skip-link")
         .arg(formula)
         .status()
         .map_err(|err| format!("failed to run brew: {err}"))?;
@@ -243,17 +288,15 @@ fn run_brew_install(formula: &str) -> Result<(), String> {
     }
 
     Err(match status.code() {
-        Some(code) => format!("brew install {formula} failed with exit code {code}"),
-        None => format!("brew install {formula} terminated by signal"),
+        Some(code) => format!("brew install --skip-link {formula} failed with exit code {code}"),
+        None => format!("brew install --skip-link {formula} terminated by signal"),
     })
 }
 
-fn exec_tool<T: AsRef<OsStr>>(tool: T, args: &[OsString]) -> ! {
+fn exec_tool<T: AsRef<OsStr>>(tool: T, args: &[OsString], prefix: &Path, formula: &str) -> ! {
     let mut cmd = Command::new(tool);
     cmd.args(args);
-    if let Some(path) = homebrew_bin_path_env() {
-        cmd.env("PATH", path);
-    }
+    cmd.env("PATH", build_exec_path(prefix, formula));
     let err = cmd.exec();
     eprintln!("brewx: failed to exec: {err}");
     process::exit(1);
