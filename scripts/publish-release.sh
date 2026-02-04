@@ -114,6 +114,8 @@ rustup target add "$target"
 
 cargo build --release --target "$target"
 
+strip "target/$target/release/brewx"
+
 rm -f "$artifact"
 tar -C "target/$target/release" -czf "$artifact" brewx
 
