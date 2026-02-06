@@ -24,6 +24,12 @@ installed: ~/.local/bin/brewx
 
 Alternatively download from the releases page.
 
+## `pkgx`
+
+Why not `pkgx`? Honestly I think `pkgx` is a better choice for many uses
+including giving your agents access to open source tooling. However if
+you already are a big Homebrew user, this is a natural next step instead
+of `pkgx`.
 
 ## Caveats
 
