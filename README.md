@@ -9,6 +9,7 @@ tool.
 
 ```sh
 brewx deno --help
+brewx +ffmpeg_full ffmpeg --version
 ```
 
 ## Installation

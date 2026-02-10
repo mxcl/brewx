@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::env;
-use std::fs;
 use std::ffi::{OsStr, OsString};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 
@@ -22,19 +22,17 @@ struct Db {
 
 fn main() {
     let mut args = env::args_os();
-    let program = args
-        .next()
-        .unwrap_or_else(|| OsString::from("brewx"));
+    let program = args.next().unwrap_or_else(|| OsString::from("brewx"));
 
-    let Some(mut tool_os) = args.next() else {
+    let Some(mut first_arg) = args.next() else {
         print_usage(&program);
         process::exit(64);
     };
 
     let mut shebang_mode = false;
-    if is_shebang_flag(&tool_os) {
+    if is_shebang_flag(&first_arg) {
         shebang_mode = true;
-        tool_os = match args.next() {
+        first_arg = match args.next() {
             Some(value) => value,
             None => {
                 print_usage(&program);
@@ -43,17 +41,36 @@ fn main() {
         };
     }
 
-    if is_help_flag(&tool_os) {
+    if is_help_flag(&first_arg) {
         print_usage(&program);
         return;
     }
 
-    if is_version_flag(&tool_os) {
+    if is_version_flag(&first_arg) {
         println!("brewx {}", env!("CARGO_PKG_VERSION"));
         return;
     }
 
-    let tool = match tool_os.to_str() {
+    let mut formulas = Vec::new();
+    while let Some(formula) = match parse_formula_spec(&first_arg) {
+        Ok(value) => value,
+        Err(err) => {
+            eprintln!("brewx: {err}");
+            process::exit(64);
+        }
+    } {
+        push_unique_string(&mut formulas, formula);
+        first_arg = match args.next() {
+            Some(value) => value,
+            None => {
+                print_usage(&program);
+                process::exit(64);
+            }
+        };
+    }
+    let has_formula_overrides = !formulas.is_empty();
+
+    let tool = match first_arg.to_str() {
         Some(value) => value.to_string(),
         None => {
             eprintln!("brewx: tool name must be valid UTF-8");
@@ -65,30 +82,35 @@ fn main() {
         let _ = args.next();
     }
     let tool_args: Vec<OsString> = args.collect();
-    let db = match load_db() {
-        Ok(db) => db,
-        Err(err) => {
-            eprintln!("brewx: {err}");
-            process::exit(1);
-        }
-    };
-
-    if db.schema != SCHEMA_VERSION {
-        eprintln!(
-            "brewx: unsupported db schema {} (expected {})",
-            db.schema, SCHEMA_VERSION
-        );
-        process::exit(1);
-    }
-
-    let Some(formula) = select_entry(&db, &tool) else {
-        eprintln!("brewx: no Homebrew formula found for '{tool}'");
-        process::exit(1);
-    };
 
     if tool.contains('/') {
         eprintln!("brewx: tool name must not contain path separators");
         process::exit(64);
+    }
+
+    if formulas.is_empty() {
+        let db = match load_db() {
+            Ok(db) => db,
+            Err(err) => {
+                eprintln!("brewx: {err}");
+                process::exit(1);
+            }
+        };
+
+        if db.schema != SCHEMA_VERSION {
+            eprintln!(
+                "brewx: unsupported db schema {} (expected {})",
+                db.schema, SCHEMA_VERSION
+            );
+            process::exit(1);
+        }
+
+        let Some(formula) = select_entry(&db, &tool) else {
+            eprintln!("brewx: no Homebrew formula found for '{tool}'");
+            process::exit(1);
+        };
+
+        formulas.push(formula.to_string());
     }
 
     let prefix = match brew_prefix() {
@@ -99,8 +121,8 @@ fn main() {
         }
     };
 
-    if let Some(path) = find_brew_executable(&prefix, formula, &tool) {
-        exec_tool(&path, &tool_args, &prefix, formula);
+    if let Some(path) = find_brew_executable_for_formulas(&prefix, &formulas, &tool) {
+        exec_tool(&path, &tool_args, &prefix, &formulas);
     }
 
     if is_root() {
@@ -108,29 +130,56 @@ fn main() {
         process::exit(1);
     }
 
-    if let Err(err) = run_brew_install(&prefix, formula) {
+    if let Err(err) = install_formulas(&prefix, &formulas, !has_formula_overrides) {
         eprintln!("brewx: {err}");
         process::exit(1);
     }
 
-    if let Some(path) = find_brew_executable(&prefix, formula, &tool) {
-        exec_tool(&path, &tool_args, &prefix, formula);
+    if let Some(path) = find_brew_executable_for_formulas(&prefix, &formulas, &tool) {
+        exec_tool(&path, &tool_args, &prefix, &formulas);
     }
 
     eprintln!(
-        "brewx: '{tool}' not found under Homebrew prefix {}",
-        prefix.display()
+        "brewx: '{tool}' not found in formulae [{}]",
+        formulas.join(", ")
     );
     process::exit(1);
 }
 
 fn load_db() -> Result<Db, String> {
-    serde_json::from_slice(EMBEDDED_DB)
-        .map_err(|err| format!("failed to parse embedded db: {err}"))
+    serde_json::from_slice(EMBEDDED_DB).map_err(|err| format!("failed to parse embedded db: {err}"))
 }
 
 fn select_entry<'a>(db: &'a Db, tool: &str) -> Option<&'a str> {
     db.entries.get(tool).map(|value| value.as_str())
+}
+
+fn parse_formula_spec(value: &OsString) -> Result<Option<String>, String> {
+    let Some(value) = value.to_str() else {
+        return Ok(None);
+    };
+
+    let Some(formula) = value.strip_prefix('+') else {
+        return Ok(None);
+    };
+
+    if formula.is_empty() {
+        return Err("package spec '+' is missing a formula name".to_string());
+    }
+
+    if formula.contains('/') {
+        return Err(format!(
+            "package spec '+{formula}' must not contain path separators"
+        ));
+    }
+
+    Ok(Some(formula.to_string()))
+}
+
+fn push_unique_string(values: &mut Vec<String>, value: String) {
+    if !values.iter().any(|entry| entry == &value) {
+        values.push(value);
+    }
 }
 
 fn is_help_flag(value: &OsString) -> bool {
@@ -147,9 +196,10 @@ fn is_shebang_flag(value: &OsString) -> bool {
 
 fn print_usage(program: &OsString) {
     let program = program.to_string_lossy();
-    println!("Usage: {program} [-! | --shebang] <executable> [args...]");
+    println!("Usage: {program} [-! | --shebang] [+formula ...] <executable> [args...]");
     println!();
     println!("Runs a Homebrew executable, installing its formula if needed.");
+    println!("Use +formula to select Homebrew formulae, pkgx-style.");
     println!("Use -! or --shebang to drop the first argument (script path).");
     println!("Uses an embedded Homebrew executable map.");
     println!("Only executes binaries under the Homebrew prefix.");
@@ -194,6 +244,19 @@ fn find_brew_executable(prefix: &Path, formula: &str, tool: &str) -> Option<Path
         }
     }
     find_cellar_executable(prefix, formula, tool)
+}
+
+fn find_brew_executable_for_formulas(
+    prefix: &Path,
+    formulas: &[String],
+    tool: &str,
+) -> Option<PathBuf> {
+    for formula in formulas {
+        if let Some(path) = find_brew_executable(prefix, formula, tool) {
+            return Some(path);
+        }
+    }
+    None
 }
 
 fn is_executable(path: &Path) -> bool {
@@ -290,20 +353,24 @@ fn brew_dependencies(formula: &str) -> Result<Vec<String>, String> {
     Ok(deps)
 }
 
-fn build_exec_path(prefix: &Path, formula: &str) -> OsString {
+fn build_exec_path(prefix: &Path, formulas: &[String]) -> OsString {
     let mut paths = Vec::new();
     add_unique_path(&mut paths, PathBuf::from("/opt/homebrew/bin"));
-    add_opt_paths(&mut paths, prefix, formula);
-    add_cellar_paths(&mut paths, prefix, formula);
+    for formula in formulas {
+        add_opt_paths(&mut paths, prefix, formula);
+        add_cellar_paths(&mut paths, prefix, formula);
+    }
 
-    match brew_dependencies(formula) {
-        Ok(deps) => {
-            for dep in deps {
-                add_opt_paths(&mut paths, prefix, &dep);
-                add_cellar_paths(&mut paths, prefix, &dep);
+    for formula in formulas {
+        match brew_dependencies(formula) {
+            Ok(deps) => {
+                for dep in deps {
+                    add_opt_paths(&mut paths, prefix, &dep);
+                    add_cellar_paths(&mut paths, prefix, &dep);
+                }
             }
+            Err(err) => eprintln!("brewx: {err}"),
         }
-        Err(err) => eprintln!("brewx: {err}"),
     }
 
     if let Some(current) = env::var_os("PATH") {
@@ -312,9 +379,23 @@ fn build_exec_path(prefix: &Path, formula: &str) -> OsString {
         }
     }
 
-    env::join_paths(paths).unwrap_or_else(|_| {
-        env::var_os("PATH").unwrap_or_else(OsString::new)
-    })
+    env::join_paths(paths).unwrap_or_else(|_| env::var_os("PATH").unwrap_or_else(OsString::new))
+}
+
+fn install_formulas(
+    prefix: &Path,
+    formulas: &[String],
+    reinstall_first: bool,
+) -> Result<(), String> {
+    for (index, formula) in formulas.iter().enumerate() {
+        if !reinstall_first || index != 0 {
+            if latest_cellar_keg(prefix, formula).is_some() {
+                continue;
+            }
+        }
+        run_brew_install(prefix, formula)?;
+    }
+    Ok(())
 }
 
 fn run_brew_install(prefix: &Path, formula: &str) -> Result<(), String> {
@@ -425,8 +506,13 @@ fn ensure_opt_link(prefix: &Path, formula: &str) -> Result<(), String> {
 
     fs::create_dir_all(&opt_dir)
         .map_err(|err| format!("failed to create {}: {err}", opt_dir.display()))?;
-    symlink(&keg, &link)
-        .map_err(|err| format!("failed to link {} -> {}: {err}", link.display(), keg.display()))
+    symlink(&keg, &link).map_err(|err| {
+        format!(
+            "failed to link {} -> {}: {err}",
+            link.display(),
+            keg.display()
+        )
+    })
 }
 
 fn brew_command() -> Command {
@@ -436,11 +522,50 @@ fn brew_command() -> Command {
     cmd
 }
 
-fn exec_tool<T: AsRef<OsStr>>(tool: T, args: &[OsString], prefix: &Path, formula: &str) -> ! {
+fn exec_tool<T: AsRef<OsStr>>(tool: T, args: &[OsString], prefix: &Path, formulas: &[String]) -> ! {
     let mut cmd = Command::new(tool);
     cmd.args(args);
-    cmd.env("PATH", build_exec_path(prefix, formula));
+    cmd.env("PATH", build_exec_path(prefix, formulas));
     let err = cmd.exec();
     eprintln!("brewx: failed to exec: {err}");
     process::exit(1);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_formula_spec_handles_pkgx_style_prefix() {
+        let value = OsString::from("+ffmpeg_full");
+        let parsed = parse_formula_spec(&value).unwrap();
+        assert_eq!(parsed, Some("ffmpeg_full".to_string()));
+    }
+
+    #[test]
+    fn parse_formula_spec_ignores_non_prefixed_tokens() {
+        let value = OsString::from("ffmpeg");
+        let parsed = parse_formula_spec(&value).unwrap();
+        assert_eq!(parsed, None);
+    }
+
+    #[test]
+    fn parse_formula_spec_rejects_empty_formula_name() {
+        let value = OsString::from("+");
+        let parsed = parse_formula_spec(&value);
+        assert_eq!(
+            parsed,
+            Err("package spec '+' is missing a formula name".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_formula_spec_rejects_path_separator() {
+        let value = OsString::from("+foo/bar");
+        let parsed = parse_formula_spec(&value);
+        assert_eq!(
+            parsed,
+            Err("package spec '+foo/bar' must not contain path separators".to_string())
+        );
+    }
 }
